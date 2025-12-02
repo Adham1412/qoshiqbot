@@ -3,17 +3,18 @@ const { Bot, InlineKeyboard, InputFile } = require("grammy");
 const express = require("express");
 const ytdl = require("@distube/ytdl-core");
 const yts = require("yt-search");
-const shazam = require("shazam-api"); 
+const shazam = require("shazam-api");
 const fs = require("fs");
 const path = require("path");
 const { pipeline } = require("stream/promises");
-const axios = require('axios'); // Faylni yuklab olish uchun kerak
+const axios = require('axios');
 
 // --- SOZLAMALAR ---
 const BOT_TOKEN = process.env.BOT_TOKEN;
 
+// Token tekshiruvi
 if (!BOT_TOKEN) {
-    console.error("XATOLIK: BOT_TOKEN .env faylida yoki Render sozlamalarida kiritilmagan!");
+    console.error("❌ XATOLIK: BOT_TOKEN topilmadi! .env fayl yoki Render Environment Variables ni tekshiring.");
     process.exit(1);
 }
 
@@ -24,24 +25,25 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.get("/", (req, res) => {
-    res.send("Bot  ishlamoqda! (Free Shazam version)");
+    res.send("🤖 Bot ishlamoqda! (Status: Active)");
 });
 
-// O'z-o'zini uyg'otib turish
+// O'z-o'zini uyg'otib turish (Ping)
 const RENDER_URL = process.env.RENDER_URL;
 if (RENDER_URL) {
     setInterval(() => {
-        axios.get(RENDER_URL).catch(() => {});
-    }, 14 * 60 * 1000);
+        console.log(`🔄 Ping yuborilmoqda: ${RENDER_URL}`);
+        axios.get(RENDER_URL).catch((err) => console.error("Ping xatosi:", err.message));
+    }, 14 * 60 * 1000); // Har 14 daqiqada
 }
 
 app.listen(PORT, () => {
-    console.log(`Server ${PORT}-portda ishga tushdi.`);
+    console.log(`🚀 Server ${PORT}-portda ishga tushdi.`);
 });
 
 // --- YORDAMCHI FUNKSIYALAR ---
 
-// Faylni vaqtincha saqlash va o'chirish uchun
+// Faylni vaqtincha yuklab olish
 async function downloadFile(url, filepath) {
     const writer = fs.createWriteStream(filepath);
     const response = await axios({
@@ -52,11 +54,11 @@ async function downloadFile(url, filepath) {
     await pipeline(response.data, writer);
 }
 
-// Vaqtni formatlash (sekund -> 03:45)
-function formatTime(seconds) {
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
+// Vaqtinchalik faylni o'chirish
+function deleteFile(filepath) {
+    fs.unlink(filepath, (err) => {
+        if (err) console.error("Fayl o'chirishda xato:", err);
+    });
 }
 
 // --- BOT LOGIKASI ---
@@ -64,13 +66,12 @@ function formatTime(seconds) {
 bot.command("start", (ctx) => {
     ctx.reply(
         "👋 **Assalomu alaykum!**\n\n" +
-        "Men Universal Musiqa botiman (v2.0).\n" +
-        "Endi hech qanday cheklovsiz ishlayman!\n\n" +
+        "Men Universal Musiqa botiman.\n\n" +
         "🔻 **Imkoniyatlarim:**\n" +
-        "🔍 **Qidiruv:** Qo'shiq nomi yoki *matnidan parcha* yozing.\n" +
-        "🎤 **Shazam:** Menga ovozli xabar yoki video yuboring, topib beraman.\n" +
+        "🔍 **Qidiruv:** Qo'shiq nomini yozing.\n" +
+        "🎤 **Shazam:** Ovozli xabar yoki video yuboring.\n" +
         "📥 **Yuklash:** YouTube link yuboring.\n\n" +
-        "Botni sinash uchun biror narsa yozing yoki audio yuboring! 🚀",
+        "🚀 Boshlash uchun biror narsa yozing!",
         { parse_mode: "Markdown" }
     );
 });
@@ -84,106 +85,130 @@ bot.on("message:text", async (ctx) => {
         return handleYoutubeLink(ctx, text);
     }
 
-    // B) Agar oddiy so'z bo'lsa (Qo'shiq qidirish)
-    await ctx.reply(`🔎 **"${text}"** bo'yicha qidirilmoqda...`);
+    // B) Oddiy qidiruv
+    const loadingMsg = await ctx.reply(`🔎 **"${text}"** qidirilmoqda...`);
     
     try {
-        // yt-search orqali qidiramiz (Bu matn orqali ham juda zo'r topadi)
         const r = await yts(text);
-        const videos = r.videos.slice(0, 5); // Birinchi 5 ta natija
+        const videos = r.videos.slice(0, 1); // Eng birinchi natijani olamiz
 
         if (!videos || videos.length === 0) {
+            await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id);
             return ctx.reply("❌ Hech narsa topilmadi.");
         }
 
-        // Eng birinchi natijani avtomatik taklif qilamiz
         const topVideo = videos[0];
         
         const keyboard = new InlineKeyboard()
             .text("🎵 MP3 yuklab olish", `dl_mp3_${topVideo.videoId}`).row()
             .text("🎬 MP4 yuklab olish", `dl_mp4_${topVideo.videoId}`);
 
+        await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id);
+        
         await ctx.replyWithPhoto(topVideo.thumbnail, {
-            caption: `🎼 **Topildi:** ${topVideo.title}\n👤 **Kanal:** ${topVideo.author.name}\n⏱ **Vaqti:** ${topVideo.timestamp}\n\nQuyidagi tugmani bosing:`,
+            caption: `🎼 **Topildi:** ${topVideo.title}\n👤 **Kanal:** ${topVideo.author.name}\n⏱ **Vaqti:** ${topVideo.timestamp}\n🔗 [YouTube'da ko'rish](${topVideo.url})`,
+            parse_mode: "Markdown",
             reply_markup: keyboard
         });
 
     } catch (error) {
         console.error(error);
+        await ctx.api.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
         ctx.reply("⚠️ Qidiruvda xatolik bo'ldi.");
     }
 });
 
-// 2. SHAZAM FUNKSIYASI (Ovoz va Video)
+// 2. SHAZAM FUNKSIYASI
 bot.on([":voice", ":audio", ":video_note"], async (ctx) => {
     const waitMsg = await ctx.reply("🎧 **Eshitmoqdaman... Tahlil qilyapman...**");
 
+    const tempFileName = `temp_${ctx.from.id}_${Date.now()}.ogg`;
+    const tempFilePath = path.join(__dirname, tempFileName);
+
     try {
-        // 1. Faylni aniqlash
+        // Fayl ID sini olish
         const fileId = ctx.message.voice?.file_id || ctx.message.audio?.file_id || ctx.message.video_note?.file_id;
         const fileInfo = await ctx.api.getFile(fileId);
+        
+        // Agar fayl juda katta bo'lsa (20MB dan oshsa)
+        if (fileInfo.file_size > 20 * 1024 * 1024) {
+             await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
+             return ctx.reply("⚠️ Fayl juda katta. Iltimos, kichikroq fayl yuboring.");
+        }
+
         const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${fileInfo.file_path}`;
 
-        // 2. Faylni serverga vaqtincha yuklash (Shazam ishlashi uchun lokal fayl kerak)
-        const tempFilePath = path.join(__dirname, `temp_${ctx.from.id}.ogg`);
+        // Serverga yuklab olish
         await downloadFile(fileUrl, tempFilePath);
 
-        // 3. Shazam qilish (shazam-api kutubxonasi orqali)
-        // Eslatma: Bu kutubxona fayl yo'lini talab qiladi
-        // Agar format mos tushmasa, ffmpeg kerak bo'lishi mumkin, lekin telegram voice odatda ishlaydi.
-        
-        // Hozirgi shazam-api versiyalari ba'zan raw data so'raydi, lekin biz sodda usulni ko'ramiz.
-        // Agar shazam-api da muammo bo'lsa, biz boshqa oddiy request yuboramiz. 
-        // Lekin eng ishonchli tekin usul - faylni tahlil qilish.
-        
-        // Oddiylik uchun: Biz faylni tahlil qilish o'rniga, agar shazam kutubxonasi ishlamasa,
-        // foydalanuvchiga matn yozishni so'rashimiz mumkin.
-        // AMMO, siz 100% dedingiz. Keling, harakat qilamiz.
-        
-        // "shazam-api" kutubxonasini to'g'ri ishlatish:
+        // Shazam qilish
         const recognizeResult = await shazam.recognize(tempFilePath); 
         
-        // Faylni o'chirib tashlaymiz (joyni to'ldirmaslik uchun)
-        fs.unlink(tempFilePath, () => {}); 
+        // Ishlatib bo'lgach o'chiramiz
+        deleteFile(tempFilePath);
 
         if (recognizeResult && recognizeResult.track) {
             const track = recognizeResult.track;
             const title = track.title;
-            const subtitle = track.subtitle; // Artist
-            
+            const subtitle = track.subtitle;
+            const cover = track.images?.coverart || "";
+
             await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
             
-            const replyText = `🎹 **Qo'shiq topildi!**\n\n🎤 **Ijrochi:** ${subtitle}\n🎼 **Nomi:** ${title}`;
-            
-            // Topilgan qo'shiqni darhol YouTube'dan qidirib, yuklash tugmasini chiqaramiz
-            const searchRes = await yts(`${title} ${subtitle}`);
-            const video = searchRes.videos[0];
+            // Qidiruv tugmasini qo'shamiz
+            const searchKeyboard = new InlineKeyboard().text("📥 Yuklab olish (Qidiruv)", `search_shazam_${title} ${subtitle}`);
 
-            let keyboard;
-            if (video) {
-                 keyboard = new InlineKeyboard()
-                    .text("📥 Hoziroq yuklab olish (MP3)", `dl_mp3_${video.videoId}`);
+            let captionText = `🎹 **Qo'shiq topildi!**\n\n🎤 **Ijrochi:** ${subtitle}\n🎼 **Nomi:** ${title}`;
+            
+            if(cover) {
+                await ctx.replyWithPhoto(cover, { caption: captionText, parse_mode: "Markdown", reply_markup: searchKeyboard });
+            } else {
+                await ctx.reply(captionText, { parse_mode: "Markdown", reply_markup: searchKeyboard });
             }
 
-            await ctx.reply(replyText, { reply_markup: keyboard });
-
         } else {
-            fs.unlink(tempFilePath, () => {}); // Xato bo'lsa ham o'chirish
+            deleteFile(tempFilePath);
             await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
-            await ctx.reply("😔 Kechirasiz, bu qo'shiqni aniqlay olmadim yoki shovqin juda baland.");
+            await ctx.reply("😔 Kechirasiz, bu qo'shiqni aniqlay olmadim.");
         }
 
     } catch (error) {
         console.error("Shazam xatosi:", error);
-        // Fayl qolib ketgan bo'lsa o'chiramiz
-        try { fs.unlinkSync(path.join(__dirname, `temp_${ctx.from.id}.ogg`)); } catch(e){}
+        deleteFile(tempFilePath); // Xato bo'lsa ham o'chiramiz
         
-        await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id);
-        await ctx.reply("⚠️ Tizim xatosi. Iltimos, qo'shiq nomini yoki so'zlarini yozib yuboring, shunda aniq topaman.");
+        await ctx.api.deleteMessage(ctx.chat.id, waitMsg.message_id).catch(() => {});
+        await ctx.reply("⚠️ Tizim xatosi yoki fayl formati qo'llab quvvatlanmadi.");
     }
 });
 
-// 3. YUKLAB OLISH FUNKSIYASI (MP3/MP4)
+// Shazamdan keyin avtomatik qidirish uchun callback
+bot.callbackQuery(/search_shazam_(.+)/, async (ctx) => {
+    const query = ctx.match[1];
+    await ctx.answerCallbackQuery("🔍 Qidirilmoqda...");
+    
+    // Matn qidiruv funksiyasini chaqiramiz (simulyatsiya)
+    // Lekin kodni takrorlamaslik uchun to'g'ridan-to'g'ri yts ishlatamiz
+    try {
+        const r = await yts(query);
+        const video = r.videos[0];
+        if(video) {
+             const keyboard = new InlineKeyboard()
+            .text("🎵 MP3 yuklab olish", `dl_mp3_${video.videoId}`);
+            
+            await ctx.replyWithPhoto(video.thumbnail, {
+                caption: `🎼 **Shazam natijasi:** ${video.title}\n\nYuklash uchun bosing:`,
+                reply_markup: keyboard
+            });
+        } else {
+            ctx.reply("YouTube dan topilmadi.");
+        }
+    } catch (e) {
+        ctx.reply("Xatolik bo'ldi.");
+    }
+});
+
+
+// 3. YUKLAB OLISH FUNKSIYASI
 async function handleYoutubeLink(ctx, url) {
     try {
         const waiting = await ctx.reply("⏳ **Link tekshirilmoqda...**");
@@ -204,34 +229,45 @@ async function handleYoutubeLink(ctx, url) {
             reply_markup: keyboard
         });
     } catch (e) {
-        ctx.reply("❌ Link yaroqsiz yoki xatolik yuz berdi.");
+        console.error(e);
+        ctx.reply("❌ Link yaroqsiz yoki YouTube blokladi.");
     }
 }
 
-// 4. CALLBACK (Tugma bosilganda)
+// 4. CALLBACK (Yuklash jarayoni)
 bot.callbackQuery(/dl_(mp3|mp4)_(.+)/, async (ctx) => {
     const format = ctx.match[1];
     const videoId = ctx.match[2];
     const url = `https://www.youtube.com/watch?v=${videoId}`;
 
     await ctx.answerCallbackQuery("📥 Yuklanmoqda...");
-    await ctx.reply(`🚀 **${format.toUpperCase()}** formatida yuklash boshlandi... (Biroz kuting)`);
+    const msg = await ctx.reply(`🚀 **${format.toUpperCase()}** formatida yuklash boshlandi...`);
 
     try {
         if (format === 'mp3') {
-            // Eng yuqori sifatli audio
+            // Audio yuklash
             const stream = ytdl(url, { quality: 'highestaudio', filter: 'audioonly' });
             await ctx.replyWithAudio(new InputFile(stream), { title: "Musiqa", performer: "@BotNomi" });
         } else {
-            // Video (Telegram uchun 50MB limit borligini unutmang, stream katta bo'lsa xato berishi mumkin)
-            const stream = ytdl(url, { quality: 'highest', filter: 'videoandaudio' });
+            // Video yuklash
+            const stream = ytdl(url, { quality: '18' }); // 18 - bu ko'pincha 360p (video+audio birga). Yuqori sifat uchun ffmpeg kerak.
             await ctx.replyWithVideo(new InputFile(stream), { caption: "🎬 Marhamat!" });
         }
+        await ctx.api.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{});
+
     } catch (error) {
         console.error(error);
-        await ctx.reply("🚫 Fayl hajmi juda katta yoki serverda xatolik. Iltimos, boshqa video bilan urinib ko'ring.");
+        await ctx.api.deleteMessage(ctx.chat.id, msg.message_id).catch(()=>{});
+        await ctx.reply("🚫 Fayl hajmi juda katta yoki serverda xatolik. (YouTube IP ni bloklagan bo'lishi mumkin)");
     }
 });
 
-bot.catch((err) => console.error("Bot xatosi:", err));
+// Xatolarni ushlash
+bot.catch((err) => {
+    const ctx = err.ctx;
+    console.error(`Error while handling update ${ctx.update.update_id}:`);
+    console.error(err.error);
+});
+
+// Botni ishga tushirish
 bot.start();
